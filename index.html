@@ -111,7 +111,7 @@
     <p>Verbinde dein Notion-Konto um dein persönliches Vertriebs-Dashboard zu aktivieren.</p>
     <div class="form-group">
       <label>Notion API Token</label>
-      <input type="password" id="input-token" placeholder="secret_xxxxxxxxxxxxxxxx..." />
+      <input type="password" id="input-token" placeholder="ntn_ oder secret_..." />
     </div>
     <div class="form-group">
       <label>Datenbank-ID</label>
@@ -207,6 +207,39 @@ function startApp(){
   loadData();
 }
 
+async function tryFetch(token, dbid) {
+  const notionUrl = 'https://api.notion.com/v1/databases/'+dbid+'/query';
+  const body = JSON.stringify({page_size:100});
+  const headers = {
+    'Authorization':'Bearer '+token,
+    'Notion-Version':'2022-06-28',
+    'Content-Type':'application/json'
+  };
+
+  // Try proxy 1: allorigins
+  try {
+    const url = 'https://api.allorigins.win/raw?url='+encodeURIComponent(notionUrl);
+    const resp = await fetch(url, {method:'POST', headers, body});
+    if(resp.ok) return await resp.json();
+  } catch(e) {}
+
+  // Try proxy 2: corsproxy.io
+  try {
+    const url = 'https://corsproxy.io/?url='+encodeURIComponent(notionUrl);
+    const resp = await fetch(url, {method:'POST', headers, body});
+    if(resp.ok) return await resp.json();
+  } catch(e) {}
+
+  // Try proxy 3: cors-anywhere
+  try {
+    const url = 'https://cors-anywhere.herokuapp.com/'+notionUrl;
+    const resp = await fetch(url, {method:'POST', headers:{...headers,'X-Requested-With':'XMLHttpRequest'}, body});
+    if(resp.ok) return await resp.json();
+  } catch(e) {}
+
+  throw new Error('Alle Verbindungsversuche fehlgeschlagen. Bitte prüfe deinen Token und die Datenbank-ID.');
+}
+
 async function loadData(){
   const t=localStorage.getItem('crm_t');
   const d=localStorage.getItem('crm_d');
@@ -216,23 +249,13 @@ async function loadData(){
   btn.classList.add('loading');
   icon.innerHTML='<span class="spinner"></span>';
   try{
-    const url=`https://corsproxy.io/?url=${encodeURIComponent('https://api.notion.com/v1/databases/'+d+'/query')}`;
-    const resp=await fetch(url,{
-      method:'POST',
-      headers:{'Authorization':'Bearer '+t,'Notion-Version':'2022-06-28','Content-Type':'application/json'},
-      body:JSON.stringify({page_size:100})
-    });
-    if(!resp.ok){
-      const e=await resp.json().catch(()=>({}));
-      throw new Error(e.message||'HTTP '+resp.status);
-    }
-    const data=await resp.json();
+    const data = await tryFetch(t, d);
     renderDashboard(data.results||[]);
     document.getElementById('last-sync').textContent='Zuletzt: '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
     document.getElementById('error-bar').style.display='none';
   }catch(e){
     const bar=document.getElementById('error-bar');
-    bar.innerHTML='⚠ Fehler: '+e.message+'<br>Prüfe deinen API Token und die Datenbank-ID. Stelle sicher dass du die Integration mit deiner Notion-Datenbank verbunden hast.';
+    bar.innerHTML='⚠ '+e.message;
     bar.style.display='block';
   }finally{
     btn.classList.remove('loading');
@@ -251,23 +274,12 @@ function gp(page,name){
   if(p.type==='phone_number')return p.phone_number||null;
   return null;
 }
-
-function fmtE(n){
-  if(!n)return'€0';
-  if(n>=1000000)return'€'+(n/1000000).toFixed(1)+'M';
-  if(n>=1000)return'€'+(n/1000).toFixed(0)+'k';
-  return'€'+Math.round(n);
-}
+function fmtE(n){if(!n)return'€0';if(n>=1000000)return'€'+(n/1000000).toFixed(1)+'M';if(n>=1000)return'€'+(n/1000).toFixed(0)+'k';return'€'+Math.round(n);}
 function ini(name){return(name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
-
 function itemHTML(c,i){
   const av=AV[i%AV.length];
   const sc=SC[c.status]||{bg:'rgba(100,100,100,.2)',color:'#888'};
-  return`<div class="call-item">
-    <div class="avatar" style="background:${av.bg};color:${av.color};">${ini(c.name)}</div>
-    <div class="call-info"><div class="call-name">${c.name}</div><div class="call-meta">${c.meta}</div></div>
-    <span class="status-pill" style="background:${sc.bg};color:${sc.color};">${c.status||'—'}</span>
-  </div>`;
+  return`<div class="call-item"><div class="avatar" style="background:${av.bg};color:${av.color};">${ini(c.name)}</div><div class="call-info"><div class="call-name">${c.name}</div><div class="call-meta">${c.meta}</div></div><span class="status-pill" style="background:${sc.bg};color:${sc.color};">${c.status||'—'}</span></div>`;
 }
 
 let CI=null;
@@ -275,7 +287,6 @@ function renderDashboard(pages){
   const today=new Date().toISOString().split('T')[0];
   let vol=0,clients=0;
   const pipe={},src={},calls=[],hot=[],cbd=[0,0,0,0,0,0,0];
-
   pages.forEach(pg=>{
     const name=gp(pg,'Name')||'Unbekannt';
     const status=gp(pg,'Status');
@@ -284,7 +295,6 @@ function renderDashboard(pages){
     const v=gp(pg,'Investiertes Volumen (€)')||0;
     const source=gp(pg,'Lead-Quelle');
     const cnt=gp(pg,'Anzahl Kontakte')||0;
-
     vol+=v;
     if(status==='💎 Kunde')clients++;
     if(status)pipe[status]=(pipe[status]||0)+1;
@@ -294,10 +304,7 @@ function renderDashboard(pages){
       const days=last?Math.floor((new Date()-new Date(last))/86400000):null;
       hot.push({name,status,meta:days!==null?`Vor ${days} Tagen kontaktiert`:'Noch kein Kontakt'});
     }
-    if(last){
-      const d=new Date(last),diff=Math.floor((new Date()-d)/86400000);
-      if(diff<=6)cbd[d.getDay()===0?6:d.getDay()-1]++;
-    }
+    if(last){const d=new Date(last),diff=Math.floor((new Date()-d)/86400000);if(diff<=6)cbd[d.getDay()===0?6:d.getDay()-1]++;}
   });
 
   document.getElementById('kpi-today').textContent=calls.length;
@@ -307,38 +314,21 @@ function renderDashboard(pages){
   document.getElementById('today-badge').textContent=calls.length;
   document.getElementById('hot-badge').textContent=hot.length;
 
-  document.getElementById('call-list').innerHTML=calls.length===0
-    ?'<div class="empty-state">Keine fälligen Anrufe heute 🎉</div>'
-    :calls.slice(0,6).map((c,i)=>itemHTML(c,i)).join('');
-
-  document.getElementById('hot-list').innerHTML=hot.length===0
-    ?'<div class="empty-state">Noch keine heißen Leads</div>'
-    :hot.slice(0,5).map((c,i)=>itemHTML(c,i)).join('');
+  document.getElementById('call-list').innerHTML=calls.length===0?'<div class="empty-state">Keine fälligen Anrufe heute 🎉</div>':calls.slice(0,6).map((c,i)=>itemHTML(c,i)).join('');
+  document.getElementById('hot-list').innerHTML=hot.length===0?'<div class="empty-state">Noch keine heißen Leads</div>':hot.slice(0,5).map((c,i)=>itemHTML(c,i)).join('');
 
   const ss=['❄️ Kalt','🔥 Warm','🎯 Heiß','⏸ Pausiert','💎 Kunde'];
   const mx=Math.max(...ss.map(s=>pipe[s]||0),1);
-  document.getElementById('pipe-rows').innerHTML=ss.map(s=>{
-    const v=pipe[s]||0,pct=Math.round((v/mx)*100);
-    return`<div class="pipe-row"><span class="pipe-label">${s}</span><div class="pipe-track"><div class="pipe-fill" style="width:${pct}%;background:${SC[s].bar};"></div></div><span class="pipe-num">${v}</span></div>`;
-  }).join('');
+  document.getElementById('pipe-rows').innerHTML=ss.map(s=>{const v=pipe[s]||0,pct=Math.round((v/mx)*100);return`<div class="pipe-row"><span class="pipe-label">${s}</span><div class="pipe-track"><div class="pipe-fill" style="width:${pct}%;background:${SC[s].bar};"></div></div><span class="pipe-num">${v}</span></div>`;}).join('');
 
   if(CI)CI.destroy();
   const sl=Object.keys(src),sd=Object.values(src);
-  if(sl.length>0){
-    CI=new Chart(document.getElementById('sourceChart'),{
-      type:'doughnut',
-      data:{labels:sl,datasets:[{data:sd,backgroundColor:['#4f8ef7','#ef4444','#22c55e','#888780'],borderWidth:0,hoverOffset:4}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:'#888',font:{size:11,family:'DM Sans'},padding:12,boxWidth:10,boxHeight:10}}},cutout:'65%'}
-    });
-  }
+  if(sl.length>0){CI=new Chart(document.getElementById('sourceChart'),{type:'doughnut',data:{labels:sl,datasets:[{data:sd,backgroundColor:['#4f8ef7','#ef4444','#22c55e','#888780'],borderWidth:0,hoverOffset:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:'#888',font:{size:11,family:'DM Sans'},padding:12,boxWidth:10,boxHeight:10}}},cutout:'65%'}});}
 
   const dn=['Mo','Di','Mi','Do','Fr','Sa','So'];
   const ti=new Date().getDay()===0?6:new Date().getDay()-1;
   document.getElementById('week-badge').textContent=cbd.reduce((a,b)=>a+b,0)+' diese Woche';
-  document.getElementById('week-grid').innerHTML=dn.map((d,i)=>{
-    const c=cbd[i],lvl=c===0?0:c<=2?1:c<=4?2:3;
-    return`<div class="day-cell day-${lvl}${i===ti?' day-today':''}"><span class="day-name">${d}</span><span class="day-num">${c}</span></div>`;
-  }).join('');
+  document.getElementById('week-grid').innerHTML=dn.map((d,i)=>{const c=cbd[i],lvl=c===0?0:c<=2?1:c<=4?2:3;return`<div class="day-cell day-${lvl}${i===ti?' day-today':''}"><span class="day-name">${d}</span><span class="day-num">${c}</span></div>`;}).join('');
 }
 
 window.addEventListener('load',()=>{
